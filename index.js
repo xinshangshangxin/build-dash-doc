@@ -2,13 +2,12 @@ process.chdir(__dirname);
 
 const Promise = require('bluebird');
 const cheerio = require('cheerio');
-const fs = Promise.promisifyAll(require('fs-extra'), {
-  multiArgs: true,
-});
+const fs = Promise.promisifyAll(require('fs-extra'));
 const request = require('request-promise');
 const sqlite3 = require('sqlite3').verbose();
 
-const DOC_NAME = 'DOC_NAME';
+const DOC_URL = 'http://www.css88.com/doc/lodash/';
+const DOC_NAME = 'lodash-zh-4.16.1';
 const docIndexPath = `${DOC_NAME}.docset/Contents/Resources/Documents/index.html`;
 
 const dbPath = `${DOC_NAME}.docset/Contents/Resources/docSet.dsidx`;
@@ -40,39 +39,44 @@ function createDatabase(apiList) {
   db.close();
 }
 
-
-function getType(text) {
-  // ['Method', 'Function', 'Class', 'Guide'];
-  return text;
-}
-
 function getApiListFromDom($) {
-  let items = $('#get-items');
-  let arr = [];
+  let apiList = [];
+  $('body').first().find('header').remove();
+  $('.doc-container-tipbox').first().remove();
+  $('head').remove();
+  $('script').remove();
 
-  items.each((index, ele) => {
-    arr.push({
-      text: ele['api key'],
-      type: getType(ele['function key']),
-      path: 'xxx.html#id',
+  $('.toc-container').first().find('li').each((index, ele) => {
+    let id = $(ele).find('a').first().attr('href')
+      .replace(/.*?#/, '#');
+    let text = $(ele).text();
+    let newId = text.replace('_.', '');
+    $(id).attr('id', newId);
+    apiList.push({
+      text,
+      type: 'Method',
+      path: `index.html#${newId}`,
     });
   });
-
-  return arr;
+  $('.toc-container').remove();
+  return apiList;
 }
 
 
 async function init() {
-  console.log('mkdir -p');
+  console.log('mkdir -p...');
   await fs.removeAsync(dirInit);
   await fs.mkdirpAsync(dirStruct);
 
   console.log('Copying resources...');
-  await fs.copyAsync('Info.plist', plistPath);
+  let plistInfo = await fs.readFileAsync('Info.plist', 'utf8');
+  plistInfo = plistInfo.replace(/DOC_NAME/gi, DOC_NAME);
+
+  await fs.writeFile(plistPath, plistInfo);
   await fs.copyAsync('icon.png', iconPath);
 
   console.log('request html...');
-  let html = await request({ url: '' });
+  let html = await request(DOC_URL);
 
   console.log('Parsing the DOM into SQL Index...');
   let $ = cheerio.load(html);
@@ -80,8 +84,21 @@ async function init() {
   createDatabase(apiList);
 
   console.log('Adding user define styles...');
-  let style = await fs.readFileAsync(stylePath);
-  await fs.writeFile(docIndexPath, `${style}${html}`);
+  let mainHtml = $('body').html().replace(/&#x611A;&#x4EBA;&#x7801;&#x5934;/gi, '');
+  let style = await fs.readFileAsync(stylePath, 'utf8');
+  await fs.writeFile(docIndexPath,
+    `<!DOCTYPE html>
+      <html class="docs">
+        <head>
+          <title>${DOC_NAME}</title>
+          <style>${style}</style>
+        </head>
+        <body>
+          ${mainHtml}
+        </body>
+      </html>
+     `
+  );
 }
 
 
