@@ -1,11 +1,10 @@
 process.chdir(__dirname);
 
-
 /* start 需要配置内容 */
 // 文档html获取URL
-const DOC_URL = 'DOC_URL';
+const DOC_URL = 'https://amery2010.gitbooks.io/nodejs-api-doc-cn/appendix/functions_glossary.html';
 // 文档在 dash 中显示的名称
-const DOC_NAME = 'DOC_NAME';
+const DOC_NAME = 'nodejs-zh';
 // 以及方法 getApiListFromDom
 //   和方法 buildHtml
 //   和图片 icon.png
@@ -16,6 +15,8 @@ const cheerio = require('cheerio');
 const fs = Promise.promisifyAll(require('fs-extra'));
 const request = require('request-promise');
 const sqlite3 = require('sqlite3').verbose();
+const url = require('url');
+const path = require('path');
 
 
 const docIndexPath = `${DOC_NAME}.docset/Contents/Resources/Documents/index.html`;
@@ -27,25 +28,86 @@ const iconPath = `${DOC_NAME}.docset/icon.png`;
 const stylePath = 'style.css';
 
 
-function getApiListFromDom($) {
-  let apiList = [];
+const baseUrl = 'https://amery2010.gitbooks.io/nodejs-api-doc-cn/';
+const cachePage = {};
 
-  $('.DOC_NAME').each((index, ele) => {
-    apiList.push({
-      text: $(ele).text(),
-      type: 'Method',
-      path: 'index.html#id',
+
+function getDetailPageHtml(url) {
+  return request(
+    {
+      url: url
+    })
+    .then((html) => {
+      return cheerio.load(html)
+    })
+    .then(($) => {
+      return $('.markdown-section').html();
+    });
+}
+
+function getApiListFromDom($) {
+  let result = [];
+  $('.markdown-section p').each((index, ele) => {
+    let name = $(ele).text();
+    let href = url.resolve(DOC_URL, $(ele).find('a').first().attr('href'));
+    let methodPath = href.replace(baseUrl, '');
+    let writePath = path.join(dirStruct, methodPath.replace(/#.*/, ''));
+
+    result.push({
+      href: href.replace(/#.*/, ''),
+      name: name,
+      methodPath: methodPath,
+      writePath: writePath,
     });
   });
-  return apiList;
+
+  return fs.readFileAsync(stylePath, 'utf8')
+    .then((styles) => {
+      return Promise.map(result, (obj) => {
+        return Promise.try(() => {
+          if (cachePage[obj.writePath]) {
+            return undefined;
+          }
+          cachePage[obj.writePath] = true;
+
+          return fs.ensureFileAsync(obj.writePath)
+            .then(() => {
+              console.info('get page: ', obj.href);
+              return getDetailPageHtml(obj.href);
+            })
+            .then((data) => {
+              return fs.writeFileAsync(obj.writePath, `
+              <!DOCTYPE html>
+                <html class="docs">
+                  <head>
+                    <style>${styles}</style>
+                  </head>
+                  <body>
+                  <section class="normal markdown-section">
+                    ${data}
+                    </section>
+                  </body>
+                </html>
+              `);
+            });
+        })
+          .then(() => {
+            return {
+              text: obj.name,
+              type: 'Method',
+              path: obj.methodPath,
+            };
+          });
+      }, {concurrency: 10});
+    });
 }
 
 async function buildHtml($) {
   console.log('building html...');
 
-  let mainHtml = $('body').html();
+  let mainHtml = $('.markdown-section').html().replace(/href="\.\.\//gi, 'href="');
   let style = await fs.readFileAsync(stylePath, 'utf8');
-  await fs.writeFile(docIndexPath,
+  await fs.writeFileAsync(docIndexPath,
     `<!DOCTYPE html>
       <html class="docs">
         <head>
@@ -53,7 +115,9 @@ async function buildHtml($) {
           <style>${style}</style>
         </head>
         <body>
+        <section class="normal markdown-section">
           ${mainHtml}
+        </section>
         </body>
       </html>
      `
@@ -98,7 +162,7 @@ async function init() {
 
   console.log('Parsing the DOM into SQL Index...');
   let $ = cheerio.load(html);
-  let apiList = getApiListFromDom($);
+  let apiList = await getApiListFromDom($);
   createDatabase(apiList);
 
   await buildHtml($);
