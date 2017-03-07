@@ -45,7 +45,7 @@ async function buildHtml($) {
 
   let mainHtml = $('body').html();
   let style = await fs.readFileAsync(stylePath, 'utf8');
-  await fs.writeFile(docIndexPath,
+  await fs.writeFileAsync(docIndexPath,
     `<!DOCTYPE html>
       <html class="docs">
         <head>
